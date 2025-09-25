@@ -24,7 +24,7 @@ jobs:
       - name: Build React frontend
         working-directory: ./public
         run: |
-          # Remove any leftover npm lockfile (safety)
+          # Remove any leftover npm lockfile
           if [ -f package-lock.json ]; then
             rm package-lock.json
           fi
@@ -34,7 +34,7 @@ jobs:
             mv .env.example .env
           fi
 
-          # Install dependencies using Yarn
+          # Install dependencies using Yarn (assumes yarn.lock is up to date)
           yarn install --frozen-lockfile
 
           # Build the React app
