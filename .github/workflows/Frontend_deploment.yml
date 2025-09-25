@@ -20,15 +20,22 @@ jobs:
         with:
           node-version: '18'
 
-      # 3️⃣ Install dependencies
-      - name: Install dependencies
-        run: yarn install --frozen-lockfile
+      # 3️⃣ Build React frontend from 'public' folder
+      - name: Build React frontend
+        working-directory: ./public
+        run: |
+          # Rename env file if needed
+          if [ -f .env.example ]; then
+            mv .env.example .env
+          fi
 
-      # 4️⃣ Build React app
-      - name: Build React app
-        run: yarn build
+          # Install dependencies
+          yarn install --frozen-lockfile
 
-      # 5️⃣ Configure AWS credentials
+          # Build the React app
+          yarn build
+
+      # 4️⃣ Configure AWS credentials
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -36,7 +43,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # 6️⃣ Create S3 bucket if it doesn't exist
+      # 5️⃣ Create S3 bucket if it doesn't exist
       - name: Create S3 bucket
         run: |
           BUCKET_NAME="my-react-frontend-${{ github.run_id }}"
@@ -58,7 +65,7 @@ jobs:
               "RestrictPublicBuckets": true
             }'
 
-      # 7️⃣ Attach S3 bucket policy for CloudFront
+      # 6️⃣ Attach S3 bucket policy for CloudFront
       - name: Attach bucket policy
         run: |
           BUCKET_NAME=$BUCKET_NAME
@@ -92,12 +99,12 @@ jobs:
           echo "$POLICY" > bucket-policy.json
           aws s3api put-bucket-policy --bucket $BUCKET_NAME --policy file://bucket-policy.json
 
-      # 8️⃣ Upload React build to S3
+      # 7️⃣ Upload React build to S3
       - name: Upload build to S3
         run: |
-          aws s3 sync ./build/ s3://$BUCKET_NAME --delete
+          aws s3 sync ./public/build/ s3://$BUCKET_NAME --delete
 
-      # 9️⃣ Invalidate CloudFront cache
+      # 8️⃣ Invalidate CloudFront cache
       - name: Invalidate CloudFront cache
         run: |
           aws cloudfront create-invalidation \
