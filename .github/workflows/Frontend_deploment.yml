@@ -20,20 +20,28 @@ jobs:
           docker --version
           docker compose version
 
-      # ✅ Build React app with Docker Compose
+      # ✅ Build React app with Docker Compose (using --no-cache as requested)
       - name: Build React App using Docker Compose
-        working-directory: simple-react-full-stack
         run: |
-          docker compose build
+          docker compose build --no-cache
+
+      # ✅ Start containers to ensure build process completes
+      - name: Start containers for build
+        run: |
+          docker compose up -d
+          sleep 30  # Wait for build to complete
+          docker compose down
 
       # ✅ Extract build artifacts from Docker image
       - name: Copy build files
-        working-directory: simple-react-full-stack
         run: |
-          CONTAINER_ID=$(docker create react-app)
-          docker cp $CONTAINER_ID:/app/build ./build
+          # Create a temporary container from the built image
+          CONTAINER_ID=$(docker create react-app:latest)
+          # Copy the build folder from container to host
+          docker cp $CONTAINER_ID:/app/build ./extracted-build
           docker rm $CONTAINER_ID
-          ls -l build
+          # Verify the build files
+          ls -la extracted-build/
 
       # ✅ Configure AWS credentials
       - name: Configure AWS credentials
@@ -46,23 +54,35 @@ jobs:
       # ✅ Create S3 bucket (static or dynamic)
       - name: Create S3 bucket
         run: |
-          BUCKET_NAME="my-react-app-${{ github.run_id }}"
+          # Use a consistent bucket name or generate unique one
+          BUCKET_NAME="${{ secrets.S3_BUCKET_NAME }}"
+          if [ -z "$BUCKET_NAME" ]; then
+            BUCKET_NAME="my-react-app-${{ github.run_id }}"
+          fi
           echo "BUCKET_NAME=$BUCKET_NAME" >> $GITHUB_ENV
-          if ! aws s3api head-bucket --bucket $BUCKET_NAME 2>/dev/null; then
+          
+          # Check if bucket exists, create if it doesn't
+          if ! aws s3api head-bucket --bucket "$BUCKET_NAME" 2>/dev/null; then
             aws s3api create-bucket \
-              --bucket $BUCKET_NAME \
-              --region ap-south-1 \
-              --create-bucket-configuration LocationConstraint=ap-south-1
+              --bucket "$BUCKET_NAME" \
+              --region ${{ secrets.AWS_REGION }} \
+              --create-bucket-configuration LocationConstraint=${{ secrets.AWS_REGION }}
           fi
 
       # ✅ Upload build to S3
       - name: Upload build to S3
         run: |
-          aws s3 sync simple-react-full-stack/build/ s3://$BUCKET_NAME --delete
+          aws s3 sync ./extracted-build/ s3://$BUCKET_NAME --delete
 
       # ✅ Invalidate CloudFront cache
       - name: Invalidate CloudFront cache
+        if: env.CLOUDFRONT_ID != ''
         run: |
           aws cloudfront create-invalidation \
-            --distribution-id $CLOUDFRONT_ID \
+            --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} \
             --paths "/*"
+
+      # ✅ Cleanup Docker resources
+      - name: Cleanup Docker
+        run: |
+          docker compose down --rmi all --volumes
