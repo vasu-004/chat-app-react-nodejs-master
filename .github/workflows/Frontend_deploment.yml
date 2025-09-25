@@ -14,33 +14,48 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ✅ Install Docker + Docker Compose (already available in ubuntu-latest)
+      # ✅ Install Docker + Docker Compose
       - name: Verify Docker and Compose
         run: |
           docker --version
           docker compose version
 
-      # ✅ Build React app with Docker Compose (using --no-cache as requested)
+      # ✅ Build React app with Docker Compose (using --no-cache)
       - name: Build React App using Docker Compose
         run: |
           docker compose build --no-cache
 
-      # ✅ Start containers to ensure build process completes
-      - name: Start containers for build
+      # ✅ Extract build artifacts directly from the built container
+      - name: Extract build files from container
         run: |
+          # Start the services to build the React app
           docker compose up -d
-          sleep 30  # Wait for build to complete
+          
+          # Wait for the build to complete
+          sleep 30
+          
+          # Copy build files directly from the running container
+          docker compose cp react-app:/app/build ./extracted-build 2>/dev/null || \
+          docker compose cp frontend:/app/build ./extracted-build 2>/dev/null || \
+          docker compose cp web:/app/build ./extracted-build 2>/dev/null || \
+          (echo "Trying alternative container names..." && \
+           CONTAINER_ID=$(docker ps -q --filter "name=react") && \
+           docker cp $CONTAINER_ID:/app/build ./extracted-build)
+          
+          # Verify the build files
+          ls -la extracted-build/
+          
+          # Stop the containers
           docker compose down
 
-      # ✅ Extract build artifacts from Docker image
-      - name: Copy build files
+      # ✅ Alternative method: Build and extract using multi-stage build
+      - name: Alternative extract method
+        if: failure() && steps.extract-build.outcome == 'failure'
         run: |
-          # Create a temporary container from the built image
-          CONTAINER_ID=$(docker create react-app:latest)
-          # Copy the build folder from container to host
-          docker cp $CONTAINER_ID:/app/build ./extracted-build
-          docker rm $CONTAINER_ID
-          # Verify the build files
+          # Build and create container in one step
+          docker compose run --name temp-build-container react-app npm run build
+          docker cp temp-build-container:/app/build ./extracted-build
+          docker rm temp-build-container
           ls -la extracted-build/
 
       # ✅ Configure AWS credentials
@@ -51,17 +66,15 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # ✅ Create S3 bucket (static or dynamic)
+      # ✅ Create S3 bucket
       - name: Create S3 bucket
         run: |
-          # Use a consistent bucket name or generate unique one
           BUCKET_NAME="${{ secrets.S3_BUCKET_NAME }}"
           if [ -z "$BUCKET_NAME" ]; then
             BUCKET_NAME="my-react-app-${{ github.run_id }}"
           fi
           echo "BUCKET_NAME=$BUCKET_NAME" >> $GITHUB_ENV
           
-          # Check if bucket exists, create if it doesn't
           if ! aws s3api head-bucket --bucket "$BUCKET_NAME" 2>/dev/null; then
             aws s3api create-bucket \
               --bucket "$BUCKET_NAME" \
@@ -76,13 +89,14 @@ jobs:
 
       # ✅ Invalidate CloudFront cache
       - name: Invalidate CloudFront cache
-        if: env.CLOUDFRONT_ID != ''
+        if: secrets.CLOUDFRONT_DISTRIBUTION_ID != ''
         run: |
           aws cloudfront create-invalidation \
             --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} \
             --paths "/*"
 
-      # ✅ Cleanup Docker resources
+      # ✅ Cleanup
       - name: Cleanup Docker
         run: |
-          docker compose down --rmi all --volumes
+          docker compose down --remove-orphans
+          docker system prune -f
