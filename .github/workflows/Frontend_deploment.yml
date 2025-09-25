@@ -1,4 +1,4 @@
-name: Deploy React App to S3 + CloudFront
+name: Deploy React App to S3 + CloudFront (Docker Compose)
 
 on:
   push:
@@ -10,25 +10,30 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ✅ Checkout code
+      # ✅ Checkout repo
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ✅ Setup Node
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
+      # ✅ Install Docker + Docker Compose (already available in ubuntu-latest)
+      - name: Verify Docker and Compose
+        run: |
+          docker --version
+          docker compose version
 
-      # ✅ Install dependencies
-      - name: Install dependencies
+      # ✅ Build React app with Docker Compose
+      - name: Build React App using Docker Compose
         working-directory: simple-react-full-stack
-        run: yarn install --frozen-lockfile
+        run: |
+          docker compose build
 
-      # ✅ Build React app
-      - name: Build React app
+      # ✅ Extract build artifacts from Docker image
+      - name: Copy build files
         working-directory: simple-react-full-stack
-        run: yarn build
+        run: |
+          CONTAINER_ID=$(docker create react-app)
+          docker cp $CONTAINER_ID:/app/build ./build
+          docker rm $CONTAINER_ID
+          ls -l build
 
       # ✅ Configure AWS credentials
       - name: Configure AWS credentials
@@ -38,115 +43,17 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # ✅ Create S3 bucket
+      # ✅ Create S3 bucket (static or dynamic)
       - name: Create S3 bucket
-        id: s3
         run: |
-          BUCKET_NAME="my-react-app-bucket-${{ github.run_id }}"
+          BUCKET_NAME="my-react-app-${{ github.run_id }}"
           echo "BUCKET_NAME=$BUCKET_NAME" >> $GITHUB_ENV
-
           if ! aws s3api head-bucket --bucket $BUCKET_NAME 2>/dev/null; then
             aws s3api create-bucket \
               --bucket $BUCKET_NAME \
               --region ap-south-1 \
               --create-bucket-configuration LocationConstraint=ap-south-1
           fi
-
-          aws s3api put-public-access-block \
-            --bucket $BUCKET_NAME \
-            --public-access-block-configuration '{
-              "BlockPublicAcls": true,
-              "IgnorePublicAcls": true,
-              "BlockPublicPolicy": true,
-              "RestrictPublicBuckets": true
-            }'
-
-      # ✅ Create CloudFront distribution (OAC)
-      - name: Create CloudFront distribution
-        id: cf
-        run: |
-          BUCKET_NAME=$BUCKET_NAME
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-
-          OAC_ID=$(aws cloudfront create-origin-access-control \
-            --origin-access-control-config '{
-              "Name": "react-app-oac",
-              "Description": "Access control for React app",
-              "SigningProtocol": "sigv4",
-              "SigningBehavior": "always",
-              "OriginAccessControlOriginType": "s3"
-            }' \
-            --query 'OriginAccessControl.Id' \
-            --output text)
-
-          echo "OAC_ID=$OAC_ID" >> $GITHUB_ENV
-
-          CLOUDFRONT_ID=$(aws cloudfront create-distribution \
-            --distribution-config "{
-              \"CallerReference\": \"react-app-${GITHUB_RUN_ID}\",
-              \"Comment\": \"React App Deployment\",
-              \"Enabled\": true,
-              \"Origins\": {
-                \"Items\": [
-                  {
-                    \"Id\": \"S3Origin\",
-                    \"DomainName\": \"${BUCKET_NAME}.s3.ap-south-1.amazonaws.com\",
-                    \"OriginAccessControlId\": \"$OAC_ID\"
-                  }
-                ],
-                \"Quantity\": 1
-              },
-              \"DefaultCacheBehavior\": {
-                \"TargetOriginId\": \"S3Origin\",
-                \"ViewerProtocolPolicy\": \"redirect-to-https\",
-                \"TrustedSigners\": {\"Enabled\": false, \"Quantity\": 0},
-                \"TrustedKeyGroups\": {\"Enabled\": false, \"Quantity\": 0},
-                \"ForwardedValues\": {
-                  \"QueryString\": false,
-                  \"Cookies\": {\"Forward\": \"none\"}
-                },
-                \"MinTTL\": 0
-              },
-              \"DefaultRootObject\": \"index.html\"
-            }" \
-            --query 'Distribution.Id' \
-            --output text)
-
-          echo "CLOUDFRONT_ID=$CLOUDFRONT_ID" >> $GITHUB_ENV
-
-      # ✅ Attach bucket policy for CloudFront
-      - name: Attach bucket policy
-        run: |
-          BUCKET_NAME=$BUCKET_NAME
-          CLOUDFRONT_ID=$CLOUDFRONT_ID
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          CLOUDFRONT_ARN="arn:aws:cloudfront::${ACCOUNT_ID}:distribution/${CLOUDFRONT_ID}"
-
-          POLICY=$(cat <<EOF
-          {
-            "Version": "2012-10-17",
-            "Statement": [
-              {
-                "Sid": "AllowCloudFrontServicePrincipalRead",
-                "Effect": "Allow",
-                "Principal": {
-                  "Service": "cloudfront.amazonaws.com"
-                },
-                "Action": "s3:GetObject",
-                "Resource": "arn:aws:s3:::$BUCKET_NAME/*",
-                "Condition": {
-                  "StringEquals": {
-                    "AWS:SourceArn": "$CLOUDFRONT_ARN"
-                  }
-                }
-              }
-            ]
-          }
-          EOF
-          )
-
-          echo "$POLICY" > bucket-policy.json
-          aws s3api put-bucket-policy --bucket $BUCKET_NAME --policy file://bucket-policy.json
 
       # ✅ Upload build to S3
       - name: Upload build to S3
