@@ -29,20 +29,22 @@ jobs:
       - name: Extract React build
         working-directory: ./  # root of project
         run: |
-          # Get image ID of frontend service
-          IMAGE_ID=$(docker images -q simple-react-frontend_front)
+          # Get image ID of the frontend service dynamically
+          IMAGE_ID=$(docker compose images -q front)
           if [ -z "$IMAGE_ID" ]; then
             echo "❌ Frontend image not found!"
+            docker compose ls
+            docker images
             exit 1
           fi
 
-          # Create temporary container
+          # Create temporary container from image
           CONTAINER_ID=$(docker create $IMAGE_ID)
 
           # Copy /app/build to host
           docker cp $CONTAINER_ID:/app/build ./build
 
-          # Remove temp container
+          # Remove temporary container
           docker rm $CONTAINER_ID
 
           ls -l build
