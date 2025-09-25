@@ -14,44 +14,19 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2️⃣ Verify Docker & Docker Compose
-      - name: Verify Docker and Compose
-        run: |
-          docker --version
-          docker compose version
+      # 2️⃣ Setup Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
 
-      # 3️⃣ Build React frontend using Docker Compose
-      - name: Build frontend
-        working-directory: ./  # root of project
-        run: docker compose build --no-cache front
+      # 3️⃣ Install dependencies
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
 
-      # 4️⃣ Extract React build from Docker image
-      - name: Extract React build
-        working-directory: ./  # root of project
-        run: |
-          # 1️⃣ Get the Docker image ID for the frontend service
-          IMAGE_ID=$(docker images --format "{{.Repository}}:{{.Tag}} {{.ID}}" | grep "-front" | awk '{print $2}')
-
-          if [ -z "$IMAGE_ID" ]; then
-            echo "❌ Frontend image not found!"
-            docker images
-            exit 1
-          fi
-
-          echo "Frontend image ID: $IMAGE_ID"
-
-          # 2️⃣ Create a temporary container from the image
-          CONTAINER_ID=$(docker create $IMAGE_ID)
-
-          # 3️⃣ Copy the React build folder from container to host
-          # Adjust this path if your Dockerfile outputs build elsewhere
-          docker cp $CONTAINER_ID:/app/build ./build
-
-          # 4️⃣ Remove the temporary container
-          docker rm $CONTAINER_ID
-
-          # 5️⃣ Verify build folder
-          ls -l build
+      # 4️⃣ Build React app
+      - name: Build React app
+        run: yarn build
 
       # 5️⃣ Configure AWS credentials
       - name: Configure AWS credentials
