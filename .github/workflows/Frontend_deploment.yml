@@ -10,23 +10,27 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # ✅ Checkout code
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # ✅ Setup Node
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: '18'
 
-      # ✅ Adjust working directory if package.json is not in root
+      # ✅ Install dependencies
       - name: Install dependencies
+        working-directory: simple-react-full-stack
         run: yarn install --frozen-lockfile
-        working-directory: ./  # change this if your package.json is inside client/ or frontend/
 
+      # ✅ Build React app
       - name: Build React app
+        working-directory: simple-react-full-stack
         run: yarn build
-        working-directory: ./  # same path as above
 
+      # ✅ Configure AWS credentials
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -36,6 +40,7 @@ jobs:
 
       # ✅ Create S3 bucket
       - name: Create S3 bucket
+        id: s3
         run: |
           BUCKET_NAME="my-react-app-bucket-${{ github.run_id }}"
           echo "BUCKET_NAME=$BUCKET_NAME" >> $GITHUB_ENV
@@ -43,14 +48,10 @@ jobs:
           if ! aws s3api head-bucket --bucket $BUCKET_NAME 2>/dev/null; then
             aws s3api create-bucket \
               --bucket $BUCKET_NAME \
-              --region ${{ secrets.AWS_REGION }} \
-              --create-bucket-configuration LocationConstraint=${{ secrets.AWS_REGION }}
-            echo "✅ Created bucket: $BUCKET_NAME"
-          else
-            echo "ℹ️ Bucket already exists: $BUCKET_NAME"
+              --region ap-south-1 \
+              --create-bucket-configuration LocationConstraint=ap-south-1
           fi
 
-          # Block public access
           aws s3api put-public-access-block \
             --bucket $BUCKET_NAME \
             --public-access-block-configuration '{
@@ -60,13 +61,13 @@ jobs:
               "RestrictPublicBuckets": true
             }'
 
-      # ✅ Create CloudFront Distribution with OAC
+      # ✅ Create CloudFront distribution (OAC)
       - name: Create CloudFront distribution
+        id: cf
         run: |
-          BUCKET_NAME=${{ env.BUCKET_NAME }}
+          BUCKET_NAME=$BUCKET_NAME
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 
-          # Create OAC
           OAC_ID=$(aws cloudfront create-origin-access-control \
             --origin-access-control-config '{
               "Name": "react-app-oac",
@@ -80,7 +81,6 @@ jobs:
 
           echo "OAC_ID=$OAC_ID" >> $GITHUB_ENV
 
-          # Create CloudFront distribution
           CLOUDFRONT_ID=$(aws cloudfront create-distribution \
             --distribution-config "{
               \"CallerReference\": \"react-app-${GITHUB_RUN_ID}\",
@@ -90,7 +90,7 @@ jobs:
                 \"Items\": [
                   {
                     \"Id\": \"S3Origin\",
-                    \"DomainName\": \"${BUCKET_NAME}.s3.${{ secrets.AWS_REGION }}.amazonaws.com\",
+                    \"DomainName\": \"${BUCKET_NAME}.s3.ap-south-1.amazonaws.com\",
                     \"OriginAccessControlId\": \"$OAC_ID\"
                   }
                 ],
@@ -113,13 +113,12 @@ jobs:
             --output text)
 
           echo "CLOUDFRONT_ID=$CLOUDFRONT_ID" >> $GITHUB_ENV
-          echo "✅ Created CloudFront distribution: $CLOUDFRONT_ID"
 
-      # ✅ Attach S3 bucket policy for CloudFront
+      # ✅ Attach bucket policy for CloudFront
       - name: Attach bucket policy
         run: |
-          BUCKET_NAME=${{ env.BUCKET_NAME }}
-          CLOUDFRONT_ID=${{ env.CLOUDFRONT_ID }}
+          BUCKET_NAME=$BUCKET_NAME
+          CLOUDFRONT_ID=$CLOUDFRONT_ID
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           CLOUDFRONT_ARN="arn:aws:cloudfront::${ACCOUNT_ID}:distribution/${CLOUDFRONT_ID}"
 
@@ -148,17 +147,15 @@ jobs:
 
           echo "$POLICY" > bucket-policy.json
           aws s3api put-bucket-policy --bucket $BUCKET_NAME --policy file://bucket-policy.json
-          echo "✅ Attached bucket policy for CloudFront"
 
       # ✅ Upload build to S3
       - name: Upload build to S3
         run: |
-          aws s3 sync build/ s3://$BUCKET_NAME --delete
-        working-directory: ./  # same folder where build/ is generated
+          aws s3 sync simple-react-full-stack/build/ s3://$BUCKET_NAME --delete
 
       # ✅ Invalidate CloudFront cache
       - name: Invalidate CloudFront cache
         run: |
           aws cloudfront create-invalidation \
-            --distribution-id ${{ env.CLOUDFRONT_ID }} \
+            --distribution-id $CLOUDFRONT_ID \
             --paths "/*"
