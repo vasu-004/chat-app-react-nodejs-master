@@ -20,16 +20,21 @@ jobs:
         with:
           node-version: '18'
 
-      # 3️⃣ Build React frontend from 'public' folder
+      # 3️⃣ Build React frontend from 'public' folder using Yarn
       - name: Build React frontend
         working-directory: ./public
         run: |
+          # Remove any leftover npm lockfile (safety)
+          if [ -f package-lock.json ]; then
+            rm package-lock.json
+          fi
+
           # Rename env file if needed
           if [ -f .env.example ]; then
             mv .env.example .env
           fi
 
-          # Install dependencies
+          # Install dependencies using Yarn
           yarn install --frozen-lockfile
 
           # Build the React app
