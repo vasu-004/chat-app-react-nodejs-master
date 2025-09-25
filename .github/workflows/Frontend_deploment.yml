@@ -18,11 +18,14 @@ jobs:
         with:
           node-version: '18'
 
+      # ✅ Adjust working directory if package.json is not in root
       - name: Install dependencies
         run: yarn install --frozen-lockfile
+        working-directory: ./  # change this if your package.json is inside client/ or frontend/
 
       - name: Build React app
         run: yarn build
+        working-directory: ./  # same path as above
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -33,7 +36,6 @@ jobs:
 
       # ✅ Create S3 bucket
       - name: Create S3 bucket
-        id: s3
         run: |
           BUCKET_NAME="my-react-app-bucket-${{ github.run_id }}"
           echo "BUCKET_NAME=$BUCKET_NAME" >> $GITHUB_ENV
@@ -41,8 +43,8 @@ jobs:
           if ! aws s3api head-bucket --bucket $BUCKET_NAME 2>/dev/null; then
             aws s3api create-bucket \
               --bucket $BUCKET_NAME \
-              --region ap-south-1 \
-              --create-bucket-configuration LocationConstraint=ap-south-1
+              --region ${{ secrets.AWS_REGION }} \
+              --create-bucket-configuration LocationConstraint=${{ secrets.AWS_REGION }}
             echo "✅ Created bucket: $BUCKET_NAME"
           else
             echo "ℹ️ Bucket already exists: $BUCKET_NAME"
@@ -60,9 +62,8 @@ jobs:
 
       # ✅ Create CloudFront Distribution with OAC
       - name: Create CloudFront distribution
-        id: cf
         run: |
-          BUCKET_NAME=$BUCKET_NAME
+          BUCKET_NAME=${{ env.BUCKET_NAME }}
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 
           # Create OAC
@@ -89,7 +90,7 @@ jobs:
                 \"Items\": [
                   {
                     \"Id\": \"S3Origin\",
-                    \"DomainName\": \"${BUCKET_NAME}.s3.ap-south-1.amazonaws.com\",
+                    \"DomainName\": \"${BUCKET_NAME}.s3.${{ secrets.AWS_REGION }}.amazonaws.com\",
                     \"OriginAccessControlId\": \"$OAC_ID\"
                   }
                 ],
@@ -117,8 +118,8 @@ jobs:
       # ✅ Attach S3 bucket policy for CloudFront
       - name: Attach bucket policy
         run: |
-          BUCKET_NAME=$BUCKET_NAME
-          CLOUDFRONT_ID=$CLOUDFRONT_ID
+          BUCKET_NAME=${{ env.BUCKET_NAME }}
+          CLOUDFRONT_ID=${{ env.CLOUDFRONT_ID }}
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           CLOUDFRONT_ARN="arn:aws:cloudfront::${ACCOUNT_ID}:distribution/${CLOUDFRONT_ID}"
 
@@ -153,10 +154,11 @@ jobs:
       - name: Upload build to S3
         run: |
           aws s3 sync build/ s3://$BUCKET_NAME --delete
+        working-directory: ./  # same folder where build/ is generated
 
       # ✅ Invalidate CloudFront cache
       - name: Invalidate CloudFront cache
         run: |
           aws cloudfront create-invalidation \
-            --distribution-id $CLOUDFRONT_ID \
+            --distribution-id ${{ env.CLOUDFRONT_ID }} \
             --paths "/*"
