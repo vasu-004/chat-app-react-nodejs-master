@@ -1,10 +1,20 @@
 version: '3.8'
+
 services:
   front:
-    build: ./public
+    build:
+      context: ./public
+      dockerfile: Dockerfile
+    container_name: react-frontend
     ports:
-      - 3000:3000
+      - "3000:3000"
+    depends_on:
+      - api
+
   api:
-    build: ./server
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: node-api
     ports:
-      - 5000:5000
+      - "5000:5000"
