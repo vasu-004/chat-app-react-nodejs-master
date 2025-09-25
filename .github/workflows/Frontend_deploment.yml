@@ -25,20 +25,29 @@ jobs:
         working-directory: ./  # root of project
         run: docker compose build --no-cache front
 
-      # 4️⃣ Run frontend container detached
-      - name: Run frontend container
-        working-directory: ./
-        run: docker compose up -d front
-
-      # 5️⃣ Extract React build
+      # 4️⃣ Extract React build from Docker image (without running container)
       - name: Extract React build
-        working-directory: ./
+        working-directory: ./  # root of project
         run: |
-          FRONT_CONTAINER=$(docker ps -qf "name=react-frontend")
-          docker cp $FRONT_CONTAINER:/usr/share/nginx/html ./build
+          # Get image ID of frontend service
+          IMAGE_ID=$(docker images -q simple-react-frontend_front)
+          if [ -z "$IMAGE_ID" ]; then
+            echo "❌ Frontend image not found!"
+            exit 1
+          fi
+
+          # Create temporary container
+          CONTAINER_ID=$(docker create $IMAGE_ID)
+
+          # Copy /app/build to host
+          docker cp $CONTAINER_ID:/app/build ./build
+
+          # Remove temp container
+          docker rm $CONTAINER_ID
+
           ls -l build
 
-      # 6️⃣ Configure AWS credentials
+      # 5️⃣ Configure AWS credentials
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -46,7 +55,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # 7️⃣ Create S3 bucket if it doesn't exist
+      # 6️⃣ Create S3 bucket if it doesn't exist
       - name: Create S3 bucket
         run: |
           BUCKET_NAME="my-react-frontend-${{ github.run_id }}"
@@ -68,7 +77,7 @@ jobs:
               "RestrictPublicBuckets": true
             }'
 
-      # 8️⃣ Attach S3 bucket policy for CloudFront
+      # 7️⃣ Attach S3 bucket policy for CloudFront
       - name: Attach bucket policy
         run: |
           BUCKET_NAME=$BUCKET_NAME
@@ -102,12 +111,12 @@ jobs:
           echo "$POLICY" > bucket-policy.json
           aws s3api put-bucket-policy --bucket $BUCKET_NAME --policy file://bucket-policy.json
 
-      # 9️⃣ Upload React build to S3
+      # 8️⃣ Upload React build to S3
       - name: Upload build to S3
         run: |
           aws s3 sync ./build/ s3://$BUCKET_NAME --delete
 
-      # 🔟 Invalidate CloudFront cache
+      # 9️⃣ Invalidate CloudFront cache
       - name: Invalidate CloudFront cache
         run: |
           aws cloudfront create-invalidation \
