@@ -26,15 +26,14 @@ jobs:
           node-version: '18'
 
       - name: Install dependencies
+        working-directory: ./public
         run: |
-          cd public
           mv .env.example .env
           yarn
 
       - name: Build frontend
-        run: |
-          cd public
-          CI=false yarn build
+        working-directory: ./public
+        run: CI=false yarn build
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
@@ -44,8 +43,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Upload frontend build to S3
-        run: |
-          aws s3 sync public/build s3://$S3_STATIC_BUCKET --delete
+        run: aws s3 sync public/build s3://$S3_STATIC_BUCKET --delete
 
       - name: Block public access on S3 buckets
         run: |
@@ -65,9 +63,7 @@ jobs:
             EXISTS=$(aws cloudfront get-distribution --id "$CLOUDFRONT_DISTRIBUTION_ID" --query 'Distribution.Id' --output text 2>/dev/null || echo "")
             if [ -n "$EXISTS" ]; then
               echo "Invalidating CloudFront distribution $CLOUDFRONT_DISTRIBUTION_ID..."
-              aws cloudfront create-invalidation \
-                --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
-                --paths "/*"
+              aws cloudfront create-invalidation --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" --paths "/*"
             else
               echo "CloudFront distribution ID $CLOUDFRONT_DISTRIBUTION_ID does not exist. Skipping invalidation."
             fi
@@ -105,17 +101,17 @@ jobs:
 
       - name: Build Docker containers
         run: docker compose build --no-cache
+        working-directory: ./server  # Ensure backend Dockerfile path
 
-      - name: Tag backend image (service name from docker-compose.yml: api)
+      - name: Tag backend image
         run: |
           docker tag api:latest $ECR_PRIVATE_URI:$IMAGE_TAG
           docker tag api:latest $ECR_PRIVATE_URI:latest
 
       - name: Login to Private ECR
-        run: |
-          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_PRIVATE_URI
+        run: aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_PRIVATE_URI
 
-      - name: Push backend image to Private ECR
+      - name: Push backend image
         run: |
           docker push $ECR_PRIVATE_URI:$IMAGE_TAG
           docker push $ECR_PRIVATE_URI:latest
