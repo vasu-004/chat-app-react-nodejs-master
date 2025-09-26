@@ -40,13 +40,13 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Upload frontend build to S3
         run: |
           aws s3 sync public/build s3://$S3_STATIC_BUCKET --delete
-          aws s3 sync public/images s3://$S3_IMAGE_BUCKET --delete
-
+        
       - name: Block public access
         run: |
           for BUCKET in $S3_STATIC_BUCKET $S3_IMAGE_BUCKET; do
