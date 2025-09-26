@@ -57,18 +57,17 @@ jobs:
               }'
           done
 
-      - name: Invalidate CloudFront cache if distribution exists
+      - name: Invalidate CloudFront cache
         run: |
           if [ -n "$CLOUDFRONT_DISTRIBUTION_ID" ] && [ "$CLOUDFRONT_DISTRIBUTION_ID" != "null" ]; then
             EXISTS=$(aws cloudfront get-distribution --id "$CLOUDFRONT_DISTRIBUTION_ID" --query 'Distribution.Id' --output text 2>/dev/null || echo "")
             if [ -n "$EXISTS" ]; then
-              echo "Invalidating CloudFront distribution $CLOUDFRONT_DISTRIBUTION_ID..."
               aws cloudfront create-invalidation --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" --paths "/*"
             else
-              echo "CloudFront distribution ID $CLOUDFRONT_DISTRIBUTION_ID does not exist. Skipping invalidation."
+              echo "CloudFront distribution does not exist. Skipping invalidation."
             fi
           else
-            echo "CloudFront distribution ID not set or null. Skipping invalidation."
+            echo "CloudFront distribution ID not set. Skipping invalidation."
           fi
 
   backend-build:
@@ -103,11 +102,11 @@ jobs:
         working-directory: ./server
         run: docker compose build --no-cache
 
-      - name: Tag backend image (service name: api)
+      - name: Tag backend image
         working-directory: ./server
         run: |
-          docker tag api:latest $ECR_PRIVATE_URI:$IMAGE_TAG
-          docker tag api:latest $ECR_PRIVATE_URI:latest
+          docker tag node-api:latest $ECR_PRIVATE_URI:$IMAGE_TAG
+          docker tag node-api:latest $ECR_PRIVATE_URI:latest
 
       - name: Login to Private ECR
         run: |
@@ -122,10 +121,7 @@ jobs:
         run: |
           CLUSTER_STATUS=$(aws ecs describe-clusters --clusters $ECS_CLUSTER --query 'clusters[0].status' --output text)
           if [ "$CLUSTER_STATUS" != "ACTIVE" ]; then
-            echo "Creating ECS cluster $ECS_CLUSTER..."
             aws ecs create-cluster --cluster-name $ECS_CLUSTER
-          else
-            echo "ECS cluster exists."
           fi
 
       - name: Register ECS task definition
@@ -160,7 +156,6 @@ jobs:
         run: |
           SERVICE_STATUS=$(aws ecs describe-services --cluster $ECS_CLUSTER --services $ECS_SERVICE --query 'services[0].status' --output text)
           if [ "$SERVICE_STATUS" != "ACTIVE" ]; then
-            echo "Creating ECS service $ECS_SERVICE..."
             aws ecs create-service \
               --cluster $ECS_CLUSTER \
               --service-name $ECS_SERVICE \
@@ -169,7 +164,6 @@ jobs:
               --launch-type FARGATE \
               --network-configuration "awsvpcConfiguration={subnets:[$SUBNET_IDS],securityGroups:[$SECURITY_GROUP_IDS],assignPublicIp:ENABLED}"
           else
-            echo "Updating ECS service $ECS_SERVICE..."
             aws ecs update-service \
               --cluster $ECS_CLUSTER \
               --service $ECS_SERVICE \
