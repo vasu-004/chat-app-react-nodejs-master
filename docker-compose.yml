@@ -1,12 +1,11 @@
-- name: Build Docker images
-  run: docker compose build --no-cache
-
-- name: Tag backend image
-  run: |
-    docker tag api:latest $ECR_PRIVATE_URI:$IMAGE_TAG
-    docker tag api:latest $ECR_PRIVATE_URI:latest
-
-- name: Push backend image
-  run: |
-    docker push $ECR_PRIVATE_URI:$IMAGE_TAG
-    docker push $ECR_PRIVATE_URI:latest
+version: '3.8'
+services:
+  front:
+    build: ./public
+    ports:
+      - 3000:3000
+  api:
+    build: ./server
+    image: react_backend_api
+    ports:
+      - 5000:5000
