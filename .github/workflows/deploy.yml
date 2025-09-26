@@ -9,14 +9,12 @@ on:
 
 jobs:
   frontend-build:
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/frontend/')
     runs-on: ubuntu-latest
-
     env:
       AWS_REGION: ${{ secrets.AWS_REGION }}
       S3_STATIC_BUCKET: ${{ secrets.S3_STATIC_BUCKET }}
       S3_IMAGE_BUCKET: ${{ secrets.S3_IMAGE_BUCKET }}
-      CLOUDFRONT_DISTRIBUTION_COMMENT: "Frontend distribution for CI/CD"
+      CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
 
     steps:
       - name: Checkout repository
@@ -27,13 +25,13 @@ jobs:
         with:
           node-version: '18'
 
-      - name: Prepare environment and install dependencies
+      - name: Install dependencies
         run: |
           cd public
           mv .env.example .env
           yarn
 
-      - name: Build project
+      - name: Build frontend
         run: |
           cd public
           CI=false yarn build
@@ -50,85 +48,27 @@ jobs:
           aws s3 sync public/build s3://$S3_STATIC_BUCKET --delete
           aws s3 sync public/images s3://$S3_IMAGE_BUCKET --delete
 
-      - name: Block public access on S3 buckets
+      - name: Block public access
         run: |
           for BUCKET in $S3_STATIC_BUCKET $S3_IMAGE_BUCKET; do
-            aws s3api put-public-access-block --bucket $BUCKET \
-            --public-access-block-configuration '{
-              "BlockPublicAcls": true,
-              "IgnorePublicAcls": true,
-              "BlockPublicPolicy": true,
-              "RestrictPublicBuckets": true
-            }'
+            aws s3api put-public-access-block --bucket "$BUCKET" \
+              --public-access-block-configuration '{
+                "BlockPublicAcls": true,
+                "IgnorePublicAcls": true,
+                "BlockPublicPolicy": true,
+                "RestrictPublicBuckets": true
+              }'
           done
-
-      - name: Create CloudFront distribution with two origins
-        id: create_cloudfront
-        run: |
-          DIST_JSON=$(aws cloudfront create-distribution --distribution-config '{
-            "CallerReference": "'"$(date +%s)"'",
-            "Comment": "'"$CLOUDFRONT_DISTRIBUTION_COMMENT"'",
-            "Enabled": true,
-            "Origins": {
-              "Quantity": 2,
-              "Items": [
-                {
-                  "Id": "static-website",
-                  "DomainName": "'"$S3_STATIC_BUCKET"'.s3.amazonaws.com",
-                  "OriginPath": "",
-                  "CustomOriginConfig": {
-                    "HTTPPort": 80,
-                    "HTTPSPort": 443,
-                    "OriginProtocolPolicy": "http-only"
-                  }
-                },
-                {
-                  "Id": "images-bucket",
-                  "DomainName": "'"$S3_IMAGE_BUCKET"'.s3.amazonaws.com",
-                  "OriginPath": "",
-                  "CustomOriginConfig": {
-                    "HTTPPort": 80,
-                    "HTTPSPort": 443,
-                    "OriginProtocolPolicy": "http-only"
-                  }
-                }
-              ]
-            },
-            "DefaultCacheBehavior": {
-              "TargetOriginId": "static-website",
-              "ViewerProtocolPolicy": "redirect-to-https",
-              "ForwardedValues": {
-                "QueryString": false,
-                "Cookies": { "Forward": "none" }
-              },
-              "TrustedSigners": { "Enabled": false, "Quantity": 0 }
-            },
-            "OriginGroups": {
-              "Quantity": 1,
-              "Items": [
-                {
-                  "Id": "origin-group-1",
-                  "FailoverCriteria": { "StatusCodes": { "Quantity": 1, "Items": [500] } },
-                  "Members": { "Quantity": 2, "Items": [{"OriginId": "static-website"},{"OriginId": "images-bucket"}] }
-                }
-              ]
-            }
-          }')
-          DIST_ID=$(echo $DIST_JSON | jq -r '.Distribution.Id')
-          echo "CLOUDFRONT_DISTRIBUTION_ID=$DIST_ID" >> $GITHUB_ENV
-          echo "Created CloudFront Distribution: $DIST_ID"
 
       - name: Invalidate CloudFront cache
         run: |
           aws cloudfront create-invalidation \
-            --distribution-id ${{ env.CLOUDFRONT_DISTRIBUTION_ID }} \
+            --distribution-id $CLOUDFRONT_DISTRIBUTION_ID \
             --paths "/*"
 
   backend-build:
     needs: frontend-build
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/backend/')
     runs-on: ubuntu-latest
-
     env:
       AWS_REGION: ${{ secrets.AWS_REGION }}
       ECR_PRIVATE_URI: ${{ secrets.ECR_PRIVATE_URI }}
@@ -137,6 +77,8 @@ jobs:
       IMAGE_TAG: ${{ github.sha }}
       TASK_ROLE_ARN: ${{ secrets.ECS_TASK_ROLE_ARN }}
       EXECUTION_ROLE_ARN: ${{ secrets.ECS_EXECUTION_ROLE_ARN }}
+      SUBNET_IDS: ${{ secrets.SUBNET_IDS }}
+      SECURITY_GROUP_IDS: ${{ secrets.SECURITY_GROUP_IDS }}
 
     steps:
       - name: Checkout repository
@@ -149,14 +91,11 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Show Docker version
-        run: docker --version
-
-      - name: Login to ECR Private
+      - name: Login to ECR
         run: |
           aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_PRIVATE_URI
 
-      - name: Build backend Docker image
+      - name: Build Docker image
         run: docker compose build --no-cache
 
       - name: Tag Docker image
@@ -164,54 +103,53 @@ jobs:
           docker tag react_backend_api:latest $ECR_PRIVATE_URI:$IMAGE_TAG
           docker tag react_backend_api:latest $ECR_PRIVATE_URI:latest
 
-      - name: Push Docker image to ECR
+      - name: Push Docker image
         run: |
           docker push $ECR_PRIVATE_URI:$IMAGE_TAG
           docker push $ECR_PRIVATE_URI:latest
 
       - name: Ensure ECS cluster exists
         run: |
-          if ! aws ecs describe-clusters --clusters $ECS_CLUSTER --query 'clusters[0].status' --output text | grep -q "ACTIVE"; then
+          CLUSTER_STATUS=$(aws ecs describe-clusters --clusters $ECS_CLUSTER --query 'clusters[0].status' --output text)
+          if [ "$CLUSTER_STATUS" != "ACTIVE" ]; then
             echo "Creating ECS cluster $ECS_CLUSTER..."
             aws ecs create-cluster --cluster-name $ECS_CLUSTER
           else
-            echo "ECS cluster $ECS_CLUSTER already exists."
+            echo "ECS cluster exists."
           fi
 
       - name: Register ECS task definition
         id: register_task
         run: |
-          TASK_DEF_JSON=$(cat <<EOF
-{
-  "family": "$ECS_SERVICE",
-  "networkMode": "awsvpc",
-  "requiresCompatibilities": ["FARGATE"],
-  "cpu": "256",
-  "memory": "512",
-  "executionRoleArn": "$EXECUTION_ROLE_ARN",
-  "taskRoleArn": "$TASK_ROLE_ARN",
-  "containerDefinitions": [
-    {
-      "name": "$ECS_SERVICE",
-      "image": "$ECR_PRIVATE_URI:$IMAGE_TAG",
-      "essential": true,
-      "portMappings": [
-        {
-          "containerPort": 80,
-          "hostPort": 80
-        }
-      ]
-    }
-  ]
-}
-EOF
-)
-          NEW_TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json "$TASK_DEF_JSON" --query 'taskDefinition.taskDefinitionArn' --output text)
-          echo "TASK_DEF_ARN=$NEW_TASK_DEF_ARN" >> $GITHUB_ENV
+          TASK_DEF_JSON=$(jq -n \
+            --arg FAMILY "$ECS_SERVICE" \
+            --arg IMAGE "$ECR_PRIVATE_URI:$IMAGE_TAG" \
+            --arg EXEC_ROLE "$EXECUTION_ROLE_ARN" \
+            --arg TASK_ROLE "$TASK_ROLE_ARN" \
+            '{
+              family: $FAMILY,
+              networkMode: "awsvpc",
+              requiresCompatibilities: ["FARGATE"],
+              cpu: "256",
+              memory: "512",
+              executionRoleArn: $EXEC_ROLE,
+              taskRoleArn: $TASK_ROLE,
+              containerDefinitions: [
+                {
+                  name: $FAMILY,
+                  image: $IMAGE,
+                  essential: true,
+                  portMappings: [{containerPort:80,hostPort:80}]
+                }
+              ]
+            }')
+          TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json "$TASK_DEF_JSON" --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "TASK_DEF_ARN=$TASK_DEF_ARN" >> $GITHUB_ENV
 
       - name: Ensure ECS service exists or update
         run: |
-          if ! aws ecs describe-services --cluster $ECS_CLUSTER --services $ECS_SERVICE --query 'services[0].status' --output text | grep -q "ACTIVE"; then
+          SERVICE_STATUS=$(aws ecs describe-services --cluster $ECS_CLUSTER --services $ECS_SERVICE --query 'services[0].status' --output text)
+          if [ "$SERVICE_STATUS" != "ACTIVE" ]; then
             echo "Creating ECS service $ECS_SERVICE..."
             aws ecs create-service \
               --cluster $ECS_CLUSTER \
@@ -219,8 +157,11 @@ EOF
               --task-definition $TASK_DEF_ARN \
               --desired-count 1 \
               --launch-type FARGATE \
-              --network-configuration "awsvpcConfiguration={subnets=[${{ secrets.SUBNET_IDS }}],securityGroups=[${{ secrets.SECURITY_GROUP_IDS }}],assignPublicIp=ENABLED}"
+              --network-configuration "awsvpcConfiguration={subnets:[$SUBNET_IDS],securityGroups:[$SECURITY_GROUP_IDS],assignPublicIp:ENABLED}"
           else
-            echo "Updating ECS service $ECS_SERVICE with new task definition..."
-            aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE --task-definition $TASK_DEF_ARN --force-new-deployment
-          fi
+            echo "Updating ECS service $ECS_SERVICE..."
+            aws ecs update-service \
+              --cluster $ECS_CLUSTER \
+              --service $ECS_SERVICE \
+              --task-definition $TASK_DEF_ARN \
+              --force-new-deployment
