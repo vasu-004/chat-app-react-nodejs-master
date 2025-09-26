@@ -78,7 +78,6 @@ jobs:
       AWS_REGION: ${{ secrets.AWS_REGION }}
       ECR_PRIVATE_URI: ${{ secrets.ECR_PRIVATE_URI }}
       ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
-      ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
       IMAGE_TAG: ${{ github.sha }}
       TASK_ROLE_ARN: ${{ secrets.ECS_TASK_ROLE_ARN }}
       EXECUTION_ROLE_ARN: ${{ secrets.ECS_EXECUTION_ROLE_ARN }}
@@ -132,7 +131,7 @@ jobs:
         id: register_task
         run: |
           TASK_DEF_JSON=$(jq -n \
-            --arg FAMILY "$ECS_SERVICE" \
+            --arg FAMILY "backend-task" \
             --arg IMAGE "$ECR_PRIVATE_URI:$IMAGE_TAG" \
             --arg EXEC_ROLE "$EXECUTION_ROLE_ARN" \
             --arg TASK_ROLE "$TASK_ROLE_ARN" \
@@ -156,28 +155,14 @@ jobs:
           TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json "$TASK_DEF_JSON" --query 'taskDefinition.taskDefinitionArn' --output text)
           echo "TASK_DEF_ARN=$TASK_DEF_ARN" >> $GITHUB_ENV
 
-      - name: Ensure ECS service exists or update
+      - name: Run ECS Task
         run: |
-          SERVICE_STATUS=$(aws ecs describe-services --cluster $ECS_CLUSTER --services $ECS_SERVICE --query 'services[0].status' --output text || echo "NONE")
-
-          # Convert comma-separated secrets into JSON arrays
           SUBNETS_JSON=$(echo "$SUBNET_IDS" | tr -d ' ' | jq -R 'split(",")')
           SG_JSON=$(echo "$SECURITY_GROUP_IDS" | tr -d ' ' | jq -R 'split(",")')
 
-          if [ "$SERVICE_STATUS" != "ACTIVE" ]; then
-            echo "Creating ECS service $ECS_SERVICE..."
-            aws ecs create-service \
-              --cluster $ECS_CLUSTER \
-              --service-name $ECS_SERVICE \
-              --task-definition $TASK_DEF_ARN \
-              --desired-count 1 \
-              --launch-type FARGATE \
-              --network-configuration "awsvpcConfiguration={subnets:$SUBNETS_JSON,securityGroups:$SG_JSON,assignPublicIp:\"ENABLED\"}"
-          else
-            echo "Updating ECS service $ECS_SERVICE..."
-            aws ecs update-service \
-              --cluster $ECS_CLUSTER \
-              --service $ECS_SERVICE \
-              --task-definition $TASK_DEF_ARN \
-              --force-new-deployment
-          fi
+          aws ecs run-task \
+            --cluster $ECS_CLUSTER \
+            --launch-type FARGATE \
+            --task-definition $TASK_DEF_ARN \
+            --count 1 \
+            --network-configuration "awsvpcConfiguration={subnets:$SUBNETS_JSON,securityGroups:$SG_JSON,assignPublicIp=\"ENABLED\"}"
