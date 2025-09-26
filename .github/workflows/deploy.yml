@@ -76,102 +76,104 @@ jobs:
           fi
 
   backend-build:
-    needs: frontend-build
-    runs-on: ubuntu-latest
-    env:
-      AWS_REGION: ${{ secrets.AWS_REGION }}
-      ECR_PRIVATE_URI: ${{ secrets.ECR_PRIVATE_URI }}
-      ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
-      ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
-      IMAGE_TAG: ${{ github.sha }}
-      TASK_ROLE_ARN: ${{ secrets.ECS_TASK_ROLE_ARN }}
-      EXECUTION_ROLE_ARN: ${{ secrets.ECS_EXECUTION_ROLE_ARN }}
-      SUBNET_IDS: ${{ secrets.SUBNET_IDS }}
-      SECURITY_GROUP_IDS: ${{ secrets.SECURITY_GROUP_IDS }}
+  needs: frontend-build
+  runs-on: ubuntu-latest
+  env:
+    AWS_REGION: ${{ secrets.AWS_REGION }}
+    ECR_PRIVATE_URI: ${{ secrets.ECR_PRIVATE_URI }}
+    ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
+    ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
+    IMAGE_TAG: ${{ github.sha }}
+    TASK_ROLE_ARN: ${{ secrets.ECS_TASK_ROLE_ARN }}
+    EXECUTION_ROLE_ARN: ${{ secrets.ECS_EXECUTION_ROLE_ARN }}
+    SUBNET_IDS: ${{ secrets.SUBNET_IDS }}
+    SECURITY_GROUP_IDS: ${{ secrets.SECURITY_GROUP_IDS }}
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+  steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
 
-      - name: Login to ECR
-        run: |
-          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_PRIVATE_URI
+    - name: Show Docker version
+      run: docker --version
 
-     # 3. Show Docker version
-      - name: Show Docker version
-        run: docker --version
+    - name: Build Docker containers
+      run: docker compose build --no-cache
 
-      # 4. Build containers with Docker Compose (no cache)
-      - name: Build containers
-        run: |
-          docker compose build --no-cache
+    - name: Tag backend image (service name from docker-compose.yml: api)
+      run: |
+        docker tag api:latest $ECR_PRIVATE_URI:$IMAGE_TAG
+        docker tag api:latest $ECR_PRIVATE_URI:latest
 
-      - name: Push Docker image
-        run: |
-          docker push $ECR_PRIVATE_URI:$IMAGE_TAG
-          docker push $ECR_PRIVATE_URI:latest
+    - name: Login to Private ECR
+      run: |
+        aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_PRIVATE_URI
 
-      - name: Ensure ECS cluster exists
-        run: |
-          CLUSTER_STATUS=$(aws ecs describe-clusters --clusters $ECS_CLUSTER --query 'clusters[0].status' --output text)
-          if [ "$CLUSTER_STATUS" != "ACTIVE" ]; then
-            echo "Creating ECS cluster $ECS_CLUSTER..."
-            aws ecs create-cluster --cluster-name $ECS_CLUSTER
-          else
-            echo "ECS cluster exists."
-          fi
+    - name: Push backend image to Private ECR
+      run: |
+        docker push $ECR_PRIVATE_URI:$IMAGE_TAG
+        docker push $ECR_PRIVATE_URI:latest
 
-      - name: Register ECS task definition
-        id: register_task
-        run: |
-          TASK_DEF_JSON=$(jq -n \
-            --arg FAMILY "$ECS_SERVICE" \
-            --arg IMAGE "$ECR_PRIVATE_URI:$IMAGE_TAG" \
-            --arg EXEC_ROLE "$EXECUTION_ROLE_ARN" \
-            --arg TASK_ROLE "$TASK_ROLE_ARN" \
-            '{
-              family: $FAMILY,
-              networkMode: "awsvpc",
-              requiresCompatibilities: ["FARGATE"],
-              cpu: "256",
-              memory: "512",
-              executionRoleArn: $EXEC_ROLE,
-              taskRoleArn: $TASK_ROLE,
-              containerDefinitions: [
-                {
-                  name: $FAMILY,
-                  image: $IMAGE,
-                  essential: true,
-                  portMappings: [{containerPort:80,hostPort:80}]
-                }
-              ]
-            }')
-          TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json "$TASK_DEF_JSON" --query 'taskDefinition.taskDefinitionArn' --output text)
-          echo "TASK_DEF_ARN=$TASK_DEF_ARN" >> $GITHUB_ENV
+    - name: Ensure ECS cluster exists
+      run: |
+        CLUSTER_STATUS=$(aws ecs describe-clusters --clusters $ECS_CLUSTER --query 'clusters[0].status' --output text)
+        if [ "$CLUSTER_STATUS" != "ACTIVE" ]; then
+          echo "Creating ECS cluster $ECS_CLUSTER..."
+          aws ecs create-cluster --cluster-name $ECS_CLUSTER
+        else
+          echo "ECS cluster exists."
+        fi
 
-      - name: Ensure ECS service exists or update
-        run: |
-          SERVICE_STATUS=$(aws ecs describe-services --cluster $ECS_CLUSTER --services $ECS_SERVICE --query 'services[0].status' --output text)
-          if [ "$SERVICE_STATUS" != "ACTIVE" ]; then
-            echo "Creating ECS service $ECS_SERVICE..."
-            aws ecs create-service \
-              --cluster $ECS_CLUSTER \
-              --service-name $ECS_SERVICE \
-              --task-definition $TASK_DEF_ARN \
-              --desired-count 1 \
-              --launch-type FARGATE \
-              --network-configuration "awsvpcConfiguration={subnets:[$SUBNET_IDS],securityGroups:[$SECURITY_GROUP_IDS],assignPublicIp:ENABLED}"
-          else
-            echo "Updating ECS service $ECS_SERVICE..."
-            aws ecs update-service \
-              --cluster $ECS_CLUSTER \
-              --service $ECS_SERVICE \
-              --task-definition $TASK_DEF_ARN \
-              --force-new-deployment
+    - name: Register ECS task definition
+      id: register_task
+      run: |
+        TASK_DEF_JSON=$(jq -n \
+          --arg FAMILY "$ECS_SERVICE" \
+          --arg IMAGE "$ECR_PRIVATE_URI:$IMAGE_TAG" \
+          --arg EXEC_ROLE "$EXECUTION_ROLE_ARN" \
+          --arg TASK_ROLE "$TASK_ROLE_ARN" \
+          '{
+            family: $FAMILY,
+            networkMode: "awsvpc",
+            requiresCompatibilities: ["FARGATE"],
+            cpu: "256",
+            memory: "512",
+            executionRoleArn: $EXEC_ROLE,
+            taskRoleArn: $TASK_ROLE,
+            containerDefinitions: [
+              {
+                name: $FAMILY,
+                image: $IMAGE,
+                essential: true,
+                portMappings: [{containerPort:80,hostPort:80}]
+              }
+            ]
+          }')
+        TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json "$TASK_DEF_JSON" --query 'taskDefinition.taskDefinitionArn' --output text)
+        echo "TASK_DEF_ARN=$TASK_DEF_ARN" >> $GITHUB_ENV
+
+    - name: Ensure ECS service exists or update
+      run: |
+        SERVICE_STATUS=$(aws ecs describe-services --cluster $ECS_CLUSTER --services $ECS_SERVICE --query 'services[0].status' --output text)
+        if [ "$SERVICE_STATUS" != "ACTIVE" ]; then
+          echo "Creating ECS service $ECS_SERVICE..."
+          aws ecs create-service \
+            --cluster $ECS_CLUSTER \
+            --service-name $ECS_SERVICE \
+            --task-definition $TASK_DEF_ARN \
+            --desired-count 1 \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets:[$SUBNET_IDS],securityGroups:[$SECURITY_GROUP_IDS],assignPublicIp:ENABLED}"
+        else
+          echo "Updating ECS service $ECS_SERVICE..."
+          aws ecs update-service \
+            --cluster $ECS_CLUSTER \
+            --service $ECS_SERVICE \
+            --task-definition $TASK_DEF_ARN \
+            --force-new-deployment
