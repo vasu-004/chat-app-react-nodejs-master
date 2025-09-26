@@ -81,8 +81,6 @@ jobs:
       IMAGE_TAG: ${{ github.sha }}
       TASK_ROLE_ARN: ${{ secrets.ECS_TASK_ROLE_ARN }}
       EXECUTION_ROLE_ARN: ${{ secrets.ECS_EXECUTION_ROLE_ARN }}
-      SUBNET_IDS: ${{ secrets.SUBNET_IDS }}
-      SECURITY_GROUP_IDS: ${{ secrets.SECURITY_GROUP_IDS }}
 
     steps:
       - name: Checkout repository
@@ -154,15 +152,3 @@ jobs:
             }')
           TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json "$TASK_DEF_JSON" --query 'taskDefinition.taskDefinitionArn' --output text)
           echo "TASK_DEF_ARN=$TASK_DEF_ARN" >> $GITHUB_ENV
-
-      - name: Run ECS Task
-        run: |
-          SUBNETS_JSON=$(echo "$SUBNET_IDS" | tr -d ' ' | jq -R 'split(",")')
-          SG_JSON=$(echo "$SECURITY_GROUP_IDS" | tr -d ' ' | jq -R 'split(",")')
-
-          aws ecs run-task \
-            --cluster $ECS_CLUSTER \
-            --launch-type FARGATE \
-            --task-definition $TASK_DEF_ARN \
-            --count 1 \
-            --network-configuration "awsvpcConfiguration={subnets:$SUBNETS_JSON,securityGroups:$SG_JSON,assignPublicIp=\"ENABLED\"}"
