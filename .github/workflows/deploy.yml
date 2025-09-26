@@ -8,7 +8,7 @@ on:
       - 'backend/**'
 
 jobs:
-  frontend-build:
+  Frontend-build:
     runs-on: ubuntu-latest
     env:
       AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -46,7 +46,8 @@ jobs:
       - name: Upload frontend build to S3
         run: |
           aws s3 sync public/build s3://$S3_STATIC_BUCKET --delete
-          
+          aws s3 sync public/images s3://$S3_IMAGE_BUCKET --delete
+
       - name: Block public access
         run: |
           for BUCKET in $S3_STATIC_BUCKET $S3_IMAGE_BUCKET; do
@@ -59,13 +60,18 @@ jobs:
               }'
           done
 
-      - name: Invalidate CloudFront cache
+      - name: Invalidate CloudFront cache if exists
         run: |
-          aws cloudfront create-invalidation \
-            --distribution-id $CLOUDFRONT_DISTRIBUTION_ID \
-            --paths "/*"
+          if [ -n "$CLOUDFRONT_DISTRIBUTION_ID" ] && [ "$CLOUDFRONT_DISTRIBUTION_ID" != "null" ]; then
+            echo "Invalidating CloudFront distribution $CLOUDFRONT_DISTRIBUTION_ID..."
+            aws cloudfront create-invalidation \
+              --distribution-id $CLOUDFRONT_DISTRIBUTION_ID \
+              --paths "/*"
+          else
+            echo "CloudFront distribution ID not set or invalid. Skipping invalidation."
+          fi
 
-  backend-build:
+  Backend-build:
     needs: frontend-build
     runs-on: ubuntu-latest
     env:
