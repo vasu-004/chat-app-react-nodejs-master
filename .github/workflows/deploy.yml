@@ -100,16 +100,18 @@ jobs:
         run: docker --version
 
       - name: Build Docker containers
+        working-directory: ./server
         run: docker compose build --no-cache
-        working-directory: ./server  # Ensure backend Dockerfile path
 
       - name: Tag backend image
+        working-directory: ./server
         run: |
           docker tag api:latest $ECR_PRIVATE_URI:$IMAGE_TAG
           docker tag api:latest $ECR_PRIVATE_URI:latest
 
       - name: Login to Private ECR
-        run: aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_PRIVATE_URI
+        run: |
+          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_PRIVATE_URI
 
       - name: Push backend image
         run: |
