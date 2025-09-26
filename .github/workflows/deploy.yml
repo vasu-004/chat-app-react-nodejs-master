@@ -8,7 +8,7 @@ on:
       - 'backend/**'
 
 jobs:
-  Frontend-build:
+  frontend-build:
     runs-on: ubuntu-latest
     env:
       AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -46,8 +46,8 @@ jobs:
       - name: Upload frontend build to S3
         run: |
           aws s3 sync public/build s3://$S3_STATIC_BUCKET --delete
-        
-      - name: Block public access
+
+      - name: Block public access on S3 buckets
         run: |
           for BUCKET in $S3_STATIC_BUCKET $S3_IMAGE_BUCKET; do
             aws s3api put-public-access-block --bucket "$BUCKET" \
@@ -60,23 +60,22 @@ jobs:
           done
 
       - name: Invalidate CloudFront cache if distribution exists
-  run: |
-    if [ -n "$CLOUDFRONT_DISTRIBUTION_ID" ] && [ "$CLOUDFRONT_DISTRIBUTION_ID" != "null" ]; then
-      EXISTS=$(aws cloudfront get-distribution --id "$CLOUDFRONT_DISTRIBUTION_ID" --query 'Distribution.Id' --output text 2>/dev/null || echo "")
-      if [ -n "$EXISTS" ]; then
-        echo "Invalidating CloudFront distribution $CLOUDFRONT_DISTRIBUTION_ID..."
-        aws cloudfront create-invalidation \
-          --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
-          --paths "/*"
-      else
-        echo "CloudFront distribution ID $CLOUDFRONT_DISTRIBUTION_ID does not exist. Skipping invalidation."
-      fi
-    else
-      echo "CloudFront distribution ID not set or null. Skipping invalidation."
-    fi
+        run: |
+          if [ -n "$CLOUDFRONT_DISTRIBUTION_ID" ] && [ "$CLOUDFRONT_DISTRIBUTION_ID" != "null" ]; then
+            EXISTS=$(aws cloudfront get-distribution --id "$CLOUDFRONT_DISTRIBUTION_ID" --query 'Distribution.Id' --output text 2>/dev/null || echo "")
+            if [ -n "$EXISTS" ]; then
+              echo "Invalidating CloudFront distribution $CLOUDFRONT_DISTRIBUTION_ID..."
+              aws cloudfront create-invalidation \
+                --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
+                --paths "/*"
+            else
+              echo "CloudFront distribution ID $CLOUDFRONT_DISTRIBUTION_ID does not exist. Skipping invalidation."
+            fi
+          else
+            echo "CloudFront distribution ID not set or null. Skipping invalidation."
+          fi
 
-
-  Backend-build:
+  backend-build:
     needs: frontend-build
     runs-on: ubuntu-latest
     env:
