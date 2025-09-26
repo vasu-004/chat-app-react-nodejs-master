@@ -1,20 +1,12 @@
-version: '3.8'
+- name: Build Docker images
+  run: docker compose build --no-cache
 
-services:
-  front:
-    build:
-      context: ./public
-      dockerfile: Dockerfile
-    container_name: react-frontend
-    ports:
-      - "3000:3000"
-    depends_on:
-      - api
+- name: Tag backend image
+  run: |
+    docker tag api:latest $ECR_PRIVATE_URI:$IMAGE_TAG
+    docker tag api:latest $ECR_PRIVATE_URI:latest
 
-  api:
-    build:
-      context: ./server
-      dockerfile: Dockerfile
-    container_name: node-api
-    ports:
-      - "5000:5000"
+- name: Push backend image
+  run: |
+    docker push $ECR_PRIVATE_URI:$IMAGE_TAG
+    docker push $ECR_PRIVATE_URI:latest
